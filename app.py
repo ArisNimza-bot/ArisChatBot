@@ -3,12 +3,14 @@ import requests
 import os
 from dotenv import load_dotenv
 
-# Load API key dari .env
+# Load .env untuk local testing
 load_dotenv()
-API_KEY = os.getenv("API_KEY")
-BASE_URL = os.getenv("BASE_URL")
 
-# System prompt untuk AI kau
+# Ambil API credentials - support both local (.env) dan cloud (Streamlit Secrets)
+API_KEY = os.getenv("API_KEY")
+BASE_URL = os.getenv("BASE_URL", "https://rootsys.cloud/v1")
+
+# System prompt
 SYSTEM_PROMPT = """
 Kau adalah kawan baik pengguna ni. Nama kau boleh pilih sendiri atau biar user panggil kau apa dia suka.
 
@@ -30,41 +32,81 @@ PERSONALITY:
 """
 
 # Setup page
-st.set_page_config(page_title="Kawan Sembang AI", page_icon="💬", layout="centered")
+st.set_page_config(
+    page_title="Kawan Sembang AI",
+    page_icon="💬",
+    layout="centered"
+)
+
 st.title(" Kawan Sembang AI")
 
-# Sidebar untuk pilih model dan settings
+# Sidebar
 with st.sidebar:
-    st.header("⚙️ Tetapan")
+    st.header("️ Tetapan")
     
-    # Dropdown pilih model
+    # Model selector - semua model kau
     selected_model = st.selectbox(
         "Pilih Model AI",
-        ["deepseek-v4-pro", "glm-5.3", "minimax-m3"],
+        [
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-v4.1-flash",
+            "glm-5.1",
+            "glm-5.2",
+            "glm-5.3",
+            "glm-5.3-flash",
+            "glm-5.3-flashhx",
+            "kimi-k2.7",
+            "kimi-k3",
+            "minimax-m3",
+            "hy3-tencent",
+            "hy4-preview",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-6-astra"
+        ],
         index=0
     )
     
     st.divider()
     
-    # Butang clear chat
-    if st.button("️ Padam Sejarah Sembang", use_container_width=True):
+    # Temperature slider
+    temperature = st.slider(
+        "Kreativiti (Temperature)",
+        min_value=0.1,
+        max_value=1.0,
+        value=0.8,
+        step=0.1,
+        help="Makin tinggi = makin creative dan random"
+    )
+    
+    st.divider()
+    
+    # Clear chat button
+    if st.button("🗑️ Padam Sejarah Sembang", use_container_width=True):
         st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         st.rerun()
-        
-    st.caption(f"API Endpoint: `{BASE_URL}`")
+    
+    st.divider()
+    st.caption(f"🔌 Endpoint: `{BASE_URL}`")
+    st.caption(f"🤖 Model: `{selected_model}`")
 
-# Initialize chat history dalam session state
+# Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-# Paparkan sejarah chat
+# Display chat history
 for message in st.session_state.messages:
     if message["role"] != "system":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-# Fungsi untuk call API
-def get_ai_response(prompt, model):
+# Function to call API
+def get_ai_response(prompt, model, temp):
+    if not API_KEY:
+        return "⚠️ API_KEY tak dijumpai. Sila check settings."
+    
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json"
@@ -73,35 +115,49 @@ def get_ai_response(prompt, model):
     data = {
         "model": model,
         "messages": st.session_state.messages,
-        "temperature": 0.8,
-        "max_tokens": 1000
+        "temperature": temp,
+        "max_tokens": 1500
     }
     
-    response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=data)
-    
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
-    else:
-        return f"⚠️ Error API: {response.status_code} - {response.text}"
+    try:
+        response = requests.post(
+            f"{BASE_URL}/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
+        else:
+            return f"⚠️ Error API: {response.status_code}\n\n{response.text}"
+    except requests.exceptions.Timeout:
+        return "⏰ Timeout - AI ambil masa terlalu lama. Cuba lagi."
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
 
-# Chat input box
+# Chat input
 if prompt := st.chat_input("Apa cerita hari ni? Taip je kat sini..."):
-    # Simpan message user
+    # Check API key first
+    if not API_KEY:
+        st.error("⚠️ API_KEY tak dijumpai! Sila tambah dalam Advanced Settings Streamlit Cloud.")
+        st.stop()
+    
+    # Save user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     
     with st.chat_message("user"):
         st.markdown(prompt)
     
-    # Call AI dan paparkan response
+    # Get AI response
     with st.chat_message("assistant"):
         with st.spinner("Tengah fikir..."):
-            response = get_ai_response(prompt, selected_model)
+            response = get_ai_response(prompt, selected_model, temperature)
             st.markdown(response)
-            
-    # Simpan message AI
+    
+    # Save AI response
     st.session_state.messages.append({"role": "assistant", "content": response})
     
-    # Limit history supaya tak berat sangat (last 30 messages)
-    if len(st.session_state.messages) > 30:
-        # Keep system prompt + last 30 messages
+    # Limit history to last 30 messages (keep system prompt)
+    if len(st.session_state.messages) > 31:
         st.session_state.messages = [st.session_state.messages[0]] + st.session_state.messages[-30:]
